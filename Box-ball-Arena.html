@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Box Ball Arena</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #111; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script type="module">
+  import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js';
+  import * as CANNON from 'https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js';
+
+  // Scene setup
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 0, 15);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  // Lights
+  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambient);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(10, 15, 10);
+  scene.add(dir);
+
+  // Physics world
+  const world = new CANNON.World();
+  world.gravity.set(0, -9.82, 0);
+  world.broadphase = new CANNON.NaiveBroadphase();
+  world.solver.iterations = 20;
+
+  // Dimensions based on window aspect ratio
+  const aspect = window.innerWidth / window.innerHeight;
+  const boxWidth = 13 * aspect; // horizontal fit
+  const boxHeight = 13;
+  const boxDepth = 12;
+  const wallThickness = 0.4;
+  const wallColor = 0xcccccc;
+
+  // Create a large 3D box (enclosed cube)
+  const boxGeo = new THREE.BoxGeometry(boxWidth, boxHeight, boxDepth);
+  const boxMat = new THREE.MeshStandardMaterial({
+    color: wallColor,
+    side: THREE.BackSide,
+    metalness: 0.1,
+    roughness: 0.8
+  });
+  const boxMesh = new THREE.Mesh(boxGeo, boxMat);
+  scene.add(boxMesh);
+
+  // Cannon walls
+  const walls = [];
+  const halfX = boxWidth / 2;
+  const halfY = boxHeight / 2;
+  const halfZ = boxDepth / 2;
+
+  function addWall(x, y, z, sizeX, sizeY, sizeZ) {
+    const wall = new CANNON.Body({
+      mass: 0,
+      shape: new CANNON.Box(new CANNON.Vec3(sizeX / 2, sizeY / 2, sizeZ / 2)),
+      position: new CANNON.Vec3(x, y, z),
+      material: new CANNON.Material({ restitution: 0.9 }) // very bouncy walls
+    });
+    world.addBody(wall);
+    walls.push(wall);
+  }
+
+  addWall( halfX, 0, 0, wallThickness, boxHeight, boxDepth); // right
+  addWall(-halfX, 0, 0, wallThickness, boxHeight, boxDepth); // left
+  addWall(0, -halfY, 0, boxWidth, wallThickness, boxDepth); // bottom
+  addWall(0,  halfY, 0, boxWidth, wallThickness, boxDepth); // top
+  addWall(0, 0,  halfZ, boxWidth, boxHeight, wallThickness); // front
+  addWall(0, 0, -halfZ, boxWidth, boxHeight, wallThickness); // back
+
+  // Ball
+  const ballRadius = 0.8;
+  const ballGeo = new THREE.SphereGeometry(ballRadius, 64, 64);
+  const ballMat = new THREE.MeshStandardMaterial({
+    color: 0xff0000,
+    roughness: 0.3,
+    metalness: 0.4,
+    emissive: 0x330000,
+    emissiveIntensity: 0.5
+  });
+  const ballMesh = new THREE.Mesh(ballGeo, ballMat);
+  scene.add(ballMesh);
+
+  const ballMaterial = new CANNON.Material({ restitution: 0.85 });
+  const ballBody = new CANNON.Body({
+    mass: 1,
+    shape: new CANNON.Sphere(ballRadius),
+    position: new CANNON.Vec3(0, 0, 0),
+    material: ballMaterial,
+    linearDamping: 0.05,
+    angularDamping: 0.05
+  });
+  world.addBody(ballBody);
+
+  // Contact material between ball and walls (for bounce)
+  const wallMaterial = new CANNON.Material({ restitution: 0.9 });
+  const contactMaterial = new CANNON.ContactMaterial(ballMaterial, wallMaterial, {
+    friction: 0.1,
+    restitution: 0.9 // bounciness
+  });
+  world.addContactMaterial(contactMaterial);
+
+  // Drag interaction
+  let isDragging = false;
+  let startMouse = new THREE.Vector2();
+
+  function getMouseProjection(event) {
+    const mouse = new THREE.Vector2(
+      (event.clientX / window.innerWidth) * 2 - 1,
+      -(event.clientY / window.innerHeight) * 2 + 1
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+    const pos = new THREE.Vector3();
+    raycaster.ray.intersectPlane(plane, pos);
+    return pos;
+  }
+
+  window.addEventListener('mousedown', (e) => {
+    const pos = getMouseProjection(e);
+    if (pos.distanceTo(ballMesh.position) < ballRadius * 1.5) {
+      isDragging = true;
+      startMouse.set(e.clientX, e.clientY);
+      ballBody.velocity.set(0, 0, 0);
+      ballBody.angularVelocity.set(0, 0, 0);
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (isDragging) {
+      const proj = getMouseProjection(e);
+      ballBody.position.set(proj.x, proj.y, 0);
+    }
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (isDragging) {
+      const dx = (e.clientX - startMouse.x) * 0.04;
+      const dy = (startMouse.y - e.clientY) * 0.04;
+      ballBody.velocity.set(dx, dy, (Math.random() - 0.5) * 4);
+      isDragging = false;
+    }
+  });
+
+  // Resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // Animation loop
+  const clock = new THREE.Clock();
+
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.02);
+    world.step(1 / 60, dt, 3);
+
+    // Keep the ball within the box (smooth correction)
+    ballBody.position.x = Math.max(-halfX + ballRadius, Math.min(halfX - ballRadius, ballBody.position.x));
+    ballBody.position.y = Math.max(-halfY + ballRadius, Math.min(halfY - ballRadius, ballBody.position.y));
+    ballBody.position.z = Math.max(-halfZ + ballRadius, Math.min(halfZ - ballRadius, ballBody.position.z));
+
+    // Sync mesh
+    ballMesh.position.copy(ballBody.position);
+    ballMesh.quaternion.copy(ballBody.quaternion);
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+</script>
+</body>
+</html>
